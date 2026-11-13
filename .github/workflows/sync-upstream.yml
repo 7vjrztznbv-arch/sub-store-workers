@@ -178,6 +178,10 @@ jobs:
           [vars]
           SUB_STORE_BACKEND_CUSTOM_NAME = "Workers"
           SUB_STORE_BACKEND_CUSTOM_ICON = "https://cdn.jsdelivr.net/gh/Yu9191/sub-store-workers@main/png/cloudflare.png"
+
+          [pages]
+          pages_build_output_dir = "pages-dist"
+          bundle = true
           TOML
           sed -i 's/^          //' wrangler.toml
           sed -i "s/__KV_ID__/${{ secrets.KV_NAMESPACE_ID }}/" wrangler.toml
@@ -196,10 +200,11 @@ jobs:
         if: steps.check.outputs.needed == 'true'
         working-directory: sub-store-workers
         run: |
+          rm -rf pages-dist
           mkdir -p pages-dist
-          # 复制所有构建产物（含 wasm 资源）到 Pages 部署目录
+          # 复制全部构建产物（含 quickjs.wasm、emscripten-module.wasm 等依赖资源）
           cp dist/* pages-dist/
-          # 重命名入口文件为 Pages 要求的 _worker.js
+          # 重命名入口文件为 Pages 高级模式要求的 _worker.js
           mv pages-dist/worker.js pages-dist/_worker.js
 
       - name: Deploy Pages
@@ -208,11 +213,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          npx wrangler pages deploy pages-dist \
-            --project-name=my-sub-store \
-            --bundle \
-            --no-config
+        run: npx wrangler pages deploy pages-dist --project-name=my-sub-store --bundle
 
       - name: Health check
         if: steps.check.outputs.needed == 'true'
