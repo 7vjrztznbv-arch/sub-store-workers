@@ -199,6 +199,9 @@ jobs:
           mkdir -p pages-dist
           cp dist/worker.js pages-dist/_worker.js
 
+       - name: Clean Wrangler Cache
+         run: rm -rf .wrangler/cache
+
       - name: Deploy Pages
         if: steps.check.outputs.needed == 'true'
         working-directory: sub-store-workers
