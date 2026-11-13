@@ -198,9 +198,20 @@ jobs:
         run: |
           rm -rf pages-dist
           mkdir -p pages-dist
-          # 复制 dist 下全部产物，含 quickjs.wasm、emscripten-module.wasm
+          # 复制全部构建产物（含所有 wasm 文件）
           cp dist/* pages-dist/
           mv pages-dist/worker.js pages-dist/_worker.js
+
+      - name: 预打包 Pages Worker（内联 WASM）
+        if: steps.check.outputs.needed == 'true'
+        working-directory: sub-store-workers
+        run: |
+          npx esbuild pages-dist/_worker.js \
+            --bundle \
+            --format=esm \
+            --outfile=pages-dist/_worker.js \
+            --loader:.wasm=binary \
+            --allow-overwrite
 
       - name: Deploy Pages
         if: steps.check.outputs.needed == 'true'
@@ -211,8 +222,8 @@ jobs:
         run: |
           npx wrangler@latest pages deploy pages-dist \
             --project-name=my-sub-store \
-            --bundle \
             --no-config
+
 
       - name: Health check
         if: steps.check.outputs.needed == 'true'
