@@ -209,7 +209,7 @@ jobs:
           npx wrangler pages deploy pages-dist --project-name=my-sub-store
             --project-name "${{ secrets.PAGES_PROJECT_NAME }}" \
             --branch main \
-            --no-bundle \1
+            --no-bundle \
             --commit-message "upstream ${{ steps.upstream.outputs.version }}" \
             --commit-dirty=true
 
