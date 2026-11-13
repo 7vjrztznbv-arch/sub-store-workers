@@ -1,8 +1,9 @@
-      - name: Generate wrangler.toml
-        if: steps.check.outputs.needed == 'true'
-        working-directory: sub-store-workers
-        run: |
+ - name: Generate wrangler.toml
+     if: steps.check.outputs.needed == 'true'
+     working-directory: sub-store-workers
+   run: |
           cat > wrangler.toml <<'TOML'
+          
 name = "sub-store-workers"
 main = "dist/worker.js"
 compatibility_date = "2024-09-23"
