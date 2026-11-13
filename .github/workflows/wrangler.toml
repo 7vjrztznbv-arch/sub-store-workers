@@ -1,23 +1,28 @@
-name = "sub-store-workers"
-main = "dist/worker.js"
-compatibility_date = "2024-09-23"
-compatibility_flags = ["nodejs_compat"]
+      - name: Generate wrangler.toml
+        if: steps.check.outputs.needed == 'true'
+        working-directory: sub-store-workers
+        run: |
+          cat > wrangler.toml <<'TOML'
+          name = "sub-store-workers"
+          main = "dist/worker.js"
+          compatibility_date = "2024-09-23"
+          compatibility_flags = ["nodejs_compat"]
 
-# KV 命名空间绑定，Workers 与 Pages 共用
+          [[kv_namespaces]]
+          binding = "SUB_STORE_DATA"
+          id = "__KV_ID__"
 
+          [triggers]
+          crons = ["55 15 * * *"]
 
-# 定时同步触发器（仅 Workers 生效）
-[triggers]
-crons = ["55 15 * * *"]
+          [vars]
+          SUB_STORE_BACKEND_CUSTOM_NAME = "Workers"
+          SUB_STORE_BACKEND_CUSTOM_ICON = "https://cdn.jsdelivr.net/gh/Yu9191/sub-store-workers@main/png/cloudflare.png"
 
-# 全局环境变量，Workers 与 Pages 共用
-[vars]
-SUB_STORE_BACKEND_CUSTOM_NAME = "Workers"
-SUB_STORE_BACKEND_CUSTOM_ICON = "https://cdn.jsdelivr.net/gh/Yu9191/sub-store-workers@main/png/cloudflare.png"
-
-# Pages 部署专属配置
-[pages]
-# 指定 Pages 静态产物目录，消除配置缺失警告
-pages_build_output_dir = "pages-dist"
-# 开启自动打包，解决 _worker.js 导入外部 wasm 文件的致命报错
-bundle = true
+          [pages]
+          pages_build_output_dir = "pages-dist"
+          bundle = true
+          TOML
+          sed -i 's/^          //' wrangler.toml
+          sed -i "s/__KV_ID__/${{ secrets.KV_NAMESPACE_ID }}/" wrangler.toml
+          cat wrangler.toml
