@@ -165,13 +165,7 @@ jobs:
           # 将预打包的产物复制为 Pages 所需的 _worker.js
           cp dist/worker.js pages-dist/_worker.js
 
-      - name: Deploy Pages
-        if: steps.check.outputs.needed == 'true'
-        working-directory: sub-store-workers
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler pages deploy pages-dist --project-name=my-sub-store
+   
       # 只部署 Worker，自带前端，彻底抛弃 Pages 的报错
       - name: Deploy Workers
         if: steps.check.outputs.needed == 'true'
