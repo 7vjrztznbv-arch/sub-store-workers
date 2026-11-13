@@ -198,9 +198,8 @@ jobs:
         run: |
           rm -rf pages-dist
           mkdir -p pages-dist
-          # 复制全部构建产物（含 quickjs.wasm、emscripten-module.wasm 等依赖资源）
+          # 复制 dist 下全部产物，含 quickjs.wasm、emscripten-module.wasm
           cp dist/* pages-dist/
-          # 重命名入口文件为 Pages 高级模式要求的 _worker.js
           mv pages-dist/worker.js pages-dist/_worker.js
 
       - name: Deploy Pages
@@ -210,7 +209,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          # 强制使用最新版 Wrangler，确保 --bundle 对 Pages _worker.js 生效
           npx wrangler@latest pages deploy pages-dist \
             --project-name=my-sub-store \
             --bundle \
