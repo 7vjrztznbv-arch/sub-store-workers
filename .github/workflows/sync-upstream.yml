@@ -132,32 +132,6 @@ jobs:
         working-directory: sub-store-workers
         run: npm run build
 
-      - name: Check worker bundle size
-        if: steps.check.outputs.needed == 'true'
-        id: size
-        working-directory: sub-store-workers
-        run: |
-          BYTES=$(stat -c %s dist/worker.js)
-          KB=$(awk "BEGIN {printf \"%.1f\", $BYTES/1024}")
-          MB=$(awk "BEGIN {printf \"%.2f\", $BYTES/1024/1024}")
-          GZIP_BYTES=$(gzip -c dist/worker.js | wc -c)
-          GZIP_KB=$(awk "BEGIN {printf \"%.1f\", $GZIP_BYTES/1024}")
-          echo "bytes=$BYTES" >> $GITHUB_OUTPUT
-          echo "kb=$KB" >> $GITHUB_OUTPUT
-          echo "mb=$MB" >> $GITHUB_OUTPUT
-          echo "gzip_kb=$GZIP_KB" >> $GITHUB_OUTPUT
-          echo "worker.js raw: ${KB} KB (${MB} MB), gzipped: ${GZIP_KB} KB"
-          # Workers 付费上限 10 MiB（gzipped），免费 3 MiB（gzipped）
-          HARD_LIMIT=$((10 * 1024 * 1024))
-          if [ "$GZIP_BYTES" -gt "$HARD_LIMIT" ]; then
-            echo "::error::Worker bundle gzipped size ${GZIP_KB} KB exceeds Cloudflare 10 MiB hard limit"
-            exit 1
-          fi
-          FREE_LIMIT=$((3 * 1024 * 1024))
-          if [ "$GZIP_BYTES" -gt "$FREE_LIMIT" ]; then
-            echo "::warning::Worker bundle gzipped size ${GZIP_KB} KB exceeds Cloudflare free tier 3 MiB limit (paid plan required)"
-          fi
-
       - name: Generate wrangler.toml
         if: steps.check.outputs.needed == 'true'
         working-directory: sub-store-workers
@@ -184,6 +158,7 @@ jobs:
           echo "Generated wrangler.toml:"
           cat wrangler.toml
 
+      # 只部署 Worker，自带前端，彻底抛弃 Pages 的报错
       - name: Deploy Workers
         if: steps.check.outputs.needed == 'true'
         working-directory: sub-store-workers
@@ -191,59 +166,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler deploy
-
-      - name: Prepare Pages bundle
-        if: steps.check.outputs.needed == 'true'
-        working-directory: sub-store-workers
-        run: |
-          mkdir -p pages-dist
-          cp dist/worker.js pages-dist/_worker.js
-
-       - name: Clean Wrangler Cache
-         run: rm -rf .wrangler/cache
-
-      - name: Deploy Pages
-        if: steps.check.outputs.needed == 'true'
-        working-directory: sub-store-workers
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler pages deploy pages-dist --project-name=my-sub-store --bundle
-
-      - name: Health check
-        if: steps.check.outputs.needed == 'true'
-        run: |
-          URL="https://sub-store-workers.${{ secrets.WORKERS_SUBDOMAIN }}.workers.dev"
-          for i in 1 2 3; do
-            sleep 10
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL/")
-            echo "Attempt $i: HTTP $CODE"
-            if [ "$CODE" = "200" ] || [ "$CODE" = "302" ] || [ "$CODE" = "404" ]; then
-              echo "Worker is alive"
-              exit 0
-            fi
-          done
-          echo "Worker health check failed"
-          exit 1
-
-      - name: Write job summary
-        if: always() && steps.check.outputs.needed == 'true'
-        run: |
-          {
-            echo "## Sub-Store Workers 同步结果"
-            echo ""
-            echo "| 项目 | 值 |"
-            echo "| --- | --- |"
-            echo "| 上游版本 | \`${{ steps.upstream.outputs.version }}\` |"
-            echo "| 上游 SHA | \`${{ steps.upstream.outputs.sha }}\` |"
-            echo "| 上次同步 SHA | \`${{ steps.last.outputs.sha }}\` |"
-            echo "| Worker 原始大小 | ${{ steps.size.outputs.kb }} KB (${{ steps.size.outputs.mb }} MB) |"
-            echo "| Worker gzip 大小 | ${{ steps.size.outputs.gzip_kb }} KB |"
-            echo ""
-            if [ "${{ steps.last.outputs.sha }}" != "none" ] && [ "${{ steps.last.outputs.sha }}" != "${{ steps.upstream.outputs.sha }}" ]; then
-              echo "**上游 diff**: https://github.com/sub-store-org/Sub-Store/compare/${{ steps.last.outputs.sha }}...${{ steps.upstream.outputs.sha }}"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Update upstream-sha marker
         if: steps.check.outputs.needed == 'true'
@@ -255,23 +177,3 @@ jobs:
           git add .upstream-sha
           git commit -m "chore: sync upstream to ${{ steps.upstream.outputs.version }} [skip ci]" || exit 0
           git push
-
-      - name: Bark notify success
-        if: steps.check.outputs.needed == 'true' && success() && env.BARK_KEY != ''
-        env:
-          BARK_KEY: ${{ secrets.BARK_KEY }}
-        run: |
-          TITLE=$(printf 'Sub-Store %%E5%%B7%%B2%%E6%%9B%%B4%%E6%%96%%B0' | sed 's/%%/%/g')
-          curl -s "https://api.day.app/${BARK_KEY}/Sub-Store%20${{ steps.upstream.outputs.version }}/Workers%20%2B%20Pages%20deployed"
-
-      - name: Bark notify failure
-        if: failure() && env.BARK_KEY != ''
-        env:
-          BARK_KEY: ${{ secrets.BARK_KEY }}
-          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          VER="${UPSTREAM_VERSION:-unknown}"
-          TITLE="Sub-Store%20Sync%20Failed%20${VER}"
-          BODY=$(printf '%s' "${RUN_URL}" | sed 's/:/%3A/g; s|/|%2F|g')
-          curl -s "https://api.day.app/${BARK_KEY}/${TITLE}/${BODY}"
