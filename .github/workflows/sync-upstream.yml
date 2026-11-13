@@ -147,7 +147,6 @@ jobs:
           echo "mb=$MB" >> $GITHUB_OUTPUT
           echo "gzip_kb=$GZIP_KB" >> $GITHUB_OUTPUT
           echo "worker.js raw: ${KB} KB (${MB} MB), gzipped: ${GZIP_KB} KB"
-          # Workers 付费上限 10 MiB（gzipped），免费 3 MiB（gzipped）
           HARD_LIMIT=$((10 * 1024 * 1024))
           if [ "$GZIP_BYTES" -gt "$HARD_LIMIT" ]; then
             echo "::error::Worker bundle gzipped size ${GZIP_KB} KB exceeds Cloudflare 10 MiB hard limit"
@@ -163,25 +162,23 @@ jobs:
         working-directory: sub-store-workers
         run: |
           cat > wrangler.toml <<'TOML'
-          name = "sub-store-workers"
-          main = "dist/worker.js"
-          compatibility_date = "2024-09-23"
-          compatibility_flags = ["nodejs_compat"]
+name = "sub-store-workers"
+main = "dist/worker.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
 
-          [[kv_namespaces]]
-          binding = "SUB_STORE_DATA"
-          id = "__KV_ID__"
+[[kv_namespaces]]
+binding = "SUB_STORE_DATA"
+id = "__KV_ID__"
 
-          [triggers]
-          crons = ["55 15 * * *"]
+[triggers]
+crons = ["55 15 * * *"]
 
-          [vars]
-          SUB_STORE_BACKEND_CUSTOM_NAME = "Workers"
-          SUB_STORE_BACKEND_CUSTOM_ICON = "https://cdn.jsdelivr.net/gh/Yu9191/sub-store-workers@main/png/cloudflare.png"
-          TOML
-          sed -i 's/^          //' wrangler.toml
+[vars]
+SUB_STORE_BACKEND_CUSTOM_NAME = "Workers"
+SUB_STORE_BACKEND_CUSTOM_ICON = "https://cdn.jsdelivr.net/gh/Yu9191/sub-store-workers@main/png/cloudflare.png"
+TOML
           sed -i "s/__KV_ID__/${{ secrets.KV_NAMESPACE_ID }}/" wrangler.toml
-          echo "Generated wrangler.toml:"
           cat wrangler.toml
 
       - name: Deploy Workers
@@ -198,11 +195,10 @@ jobs:
         run: |
           rm -rf pages-dist
           mkdir -p pages-dist
-          # 复制全部构建产物（含所有 wasm 文件）
           cp dist/* pages-dist/
           mv pages-dist/worker.js pages-dist/_worker.js
 
-      - name: 预打包 Pages Worker（内联 WASM）
+      - name: Pre-bundle Pages Worker
         if: steps.check.outputs.needed == 'true'
         working-directory: sub-store-workers
         run: |
@@ -223,7 +219,6 @@ jobs:
           npx wrangler@latest pages deploy pages-dist \
             --project-name=my-sub-store \
             --no-config
-
 
       - name: Health check
         if: steps.check.outputs.needed == 'true'
@@ -271,7 +266,7 @@ jobs:
           git commit -m "chore: sync upstream to ${{ steps.upstream.outputs.version }} [skip ci]" || exit 0
           git push
 
-          - name: Bark notify success
+      - name: Bark notify success
         if: steps.check.outputs.needed == 'true' && success()
         env:
           BARK_KEY: ${{ secrets.BARK_KEY }}
