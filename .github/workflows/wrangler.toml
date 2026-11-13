@@ -22,6 +22,7 @@
           [pages]
           pages_build_output_dir = "pages-dist"
           bundle = true
+          
           TOML
           sed -i 's/^          //' wrangler.toml
           sed -i "s/__KV_ID__/${{ secrets.KV_NAMESPACE_ID }}/" wrangler.toml
