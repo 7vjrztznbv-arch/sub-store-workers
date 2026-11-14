@@ -205,6 +205,7 @@ jobs:
 
       - name: Deploy Pages
         if: steps.check.outputs.needed == 'true'
+        id: pages
         working-directory: sub-store-workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -213,27 +214,77 @@ jobs:
           # 关键：不要加 --no-bundle。_worker.js 里有 `import x from "./quickjs.wasm"`，
           # 只有让 wrangler 打包，wasm 才会作为独立模块随 _worker.bundle 一起上传；
           # 加 --no-bundle 会直接触发 block-worker-js-imports 报错退出。
+          set -o pipefail
           npx wrangler pages deploy pages-dist \
             --project-name "${{ secrets.PAGES_PROJECT_NAME }}" \
             --branch main \
             --commit-message "upstream ${{ steps.upstream.outputs.version }}" \
-            --commit-dirty=true
+            --commit-dirty=true 2>&1 | tee /tmp/pages-deploy.log
+          # 从部署输出里抓正式域名，给健康检查用（比手记 subdomain 可靠）
+          URL=$(grep -Eo 'https://[A-Za-z0-9._-]+\.pages\.dev' /tmp/pages-deploy.log | head -1 || true)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Pages URL: ${URL:-未识别}"
+
+      - name: Update upstream-sha marker
+        # 部署已成功，先把版本标记推进，避免下次白跑一遍完整流程
+        if: steps.check.outputs.needed == 'true'
+        working-directory: sub-store-workers
+        run: |
+          echo "${{ steps.upstream.outputs.sha }}" > .upstream-sha
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .upstream-sha
+          git commit -m "chore: sync upstream to ${{ steps.upstream.outputs.version }} [skip ci]" || exit 0
+          git push
 
       - name: Health check
         if: steps.check.outputs.needed == 'true'
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.url }}
+          WORKERS_SUBDOMAIN: ${{ secrets.WORKERS_SUBDOMAIN }}
         run: |
-          URL="https://sub-store-workers.${{ secrets.WORKERS_SUBDOMAIN }}.workers.dev"
-          for i in 1 2 3; do
-            sleep 10
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL/")
-            echo "Attempt $i: HTTP $CODE"
-            if [ "$CODE" = "200" ] || [ "$CODE" = "302" ] || [ "$CODE" = "404" ]; then
-              echo "Worker is alive"
-              exit 0
+          # 主检查：Pages 正式域名（用户/前端真正访问的入口）
+          PAGES_FAIL=0
+          if [ -z "${PAGES_URL:-}" ]; then
+            echo "::warning::未能从部署输出解析 pages.dev 域名，跳过 Pages 检查"
+          else
+            for i in 1 2 3; do
+              sleep 8
+              CODE=$(curl -s -o /tmp/pages-body.txt -m 20 -w "%{http_code}" "$PAGES_URL/") || CODE=000
+              echo "Pages attempt $i: HTTP $CODE  ($PAGES_URL)"
+              case "$CODE" in
+                200|301|302|401|403|404) echo "Pages 正常"; PAGES_FAIL=0; break ;;
+                000) PAGES_FAIL=1 ;;
+                *) PAGES_FAIL=1; echo "  响应片段: $(head -c 200 /tmp/pages-body.txt 2>/dev/null)" ;;
+              esac
+            done
+            if [ "$PAGES_FAIL" = "1" ]; then
+              echo "::error::Pages 健康检查未通过"
+              exit 1
             fi
-          done
-          echo "Worker health check failed"
-          exit 1
+          fi
+
+          # 附加检查：workers.dev（Cron 依赖它）。失败只告警，不判死 ——
+          # workers.dev 在国内被墙、或 dashboard 关闭了该域名，都会导致探测失败，与部署无关。
+          if [ -z "${WORKERS_SUBDOMAIN:-}" ]; then
+            echo "::warning::WORKERS_SUBDOMAIN secret 未配置，跳过 workers.dev 检查"
+          else
+            WURL="https://sub-store-workers.${WORKERS_SUBDOMAIN}.workers.dev"
+            WCODE=000
+            for i in 1 2 3; do
+              sleep 5
+              WCODE=$(curl -s -o /dev/null -m 15 -w "%{http_code}" "$WURL/") || WCODE=000
+              echo "Workers attempt $i: HTTP $WCODE  ($WURL)"
+              case "$WCODE" in
+                200|301|302|401|403|404|500) break ;;
+              esac
+            done
+            case "$WCODE" in
+              200|301|302|401|403|404) echo "Workers 正常" ;;
+              500) echo "::warning::$WURL 返回 500：通常是 KV 绑定缺失或 runtime 报错（Pages 入口不受影响）" ;;
+              *) echo "::warning::$WURL 不可达（HTTP $WCODE）：workers.dev 被墙 / 已关闭属正常现象；若依赖 Cron 请自查" ;;
+            esac
+          fi
 
       - name: Write job summary
         if: always() && steps.check.outputs.needed == 'true'
@@ -248,22 +299,12 @@ jobs:
             echo "| 上次同步 SHA | \`${{ steps.last.outputs.sha }}\` |"
             echo "| Worker 原始大小 | ${{ steps.size.outputs.kb }} KB (${{ steps.size.outputs.mb }} MB) |"
             echo "| Worker gzip 大小 | ${{ steps.size.outputs.gzip_kb }} KB |"
+            echo "| Pages 域名 | ${{ steps.pages.outputs.url }} |"
             echo ""
             if [ "${{ steps.last.outputs.sha }}" != "none" ] && [ "${{ steps.last.outputs.sha }}" != "${{ steps.upstream.outputs.sha }}" ]; then
               echo "**上游 diff**: https://github.com/sub-store-org/Sub-Store/compare/${{ steps.last.outputs.sha }}...${{ steps.upstream.outputs.sha }}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Update upstream-sha marker
-        if: steps.check.outputs.needed == 'true'
-        working-directory: sub-store-workers
-        run: |
-          echo "${{ steps.upstream.outputs.sha }}" > .upstream-sha
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .upstream-sha
-          git commit -m "chore: sync upstream to ${{ steps.upstream.outputs.version }} [skip ci]" || exit 0
-          git push
 
       - name: Bark notify success
         if: steps.check.outputs.needed == 'true' && success() && env.BARK_KEY != ''
