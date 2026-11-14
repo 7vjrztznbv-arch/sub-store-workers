@@ -198,6 +198,10 @@ jobs:
         run: |
           mkdir -p pages-dist
           cp dist/worker.js pages-dist/_worker.js
+          # _worker.js 里有 `import h from "./quickjs.wasm"`，必须把 wasm 一起放进部署目录，
+          # 否则 wrangler 打包时会 Could not resolve "./quickjs.wasm"
+          cp dist/quickjs.wasm pages-dist/quickjs.wasm
+          ls -la pages-dist
 
       - name: Deploy Pages
         if: steps.check.outputs.needed == 'true'
@@ -206,10 +210,12 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          # 关键：不要加 --no-bundle。_worker.js 里有 `import x from "./quickjs.wasm"`，
+          # 只有让 wrangler 打包，wasm 才会作为独立模块随 _worker.bundle 一起上传；
+          # 加 --no-bundle 会直接触发 block-worker-js-imports 报错退出。
           npx wrangler pages deploy pages-dist \
             --project-name "${{ secrets.PAGES_PROJECT_NAME }}" \
             --branch main \
-            --no-bundle \
             --commit-message "upstream ${{ steps.upstream.outputs.version }}" \
             --commit-dirty=true
 
