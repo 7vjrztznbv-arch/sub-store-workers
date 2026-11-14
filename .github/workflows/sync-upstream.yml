@@ -243,29 +243,34 @@ jobs:
           PAGES_URL: ${{ steps.pages.outputs.url }}
           WORKERS_SUBDOMAIN: ${{ secrets.WORKERS_SUBDOMAIN }}
         run: |
-          # 主检查：Pages 正式域名（用户/前端真正访问的入口）
-          PAGES_FAIL=0
+          # 探针定位：只记录体检结果 + 打印诊断，不作失败门禁。
+          # 部署是否成功已经由 `wrangler deploy` / `wrangler pages deploy` 的退出码把关，
+          # 这里再判死只会因为 CDN 传播延迟、国内网络不可达等无关因素把整条流水线拖红。
+          PAGES_OK=0
           if [ -z "${PAGES_URL:-}" ]; then
             echo "::warning::未能从部署输出解析 pages.dev 域名，跳过 Pages 检查"
           else
-            for i in 1 2 3; do
-              sleep 8
-              CODE=$(curl -s -o /tmp/pages-body.txt -m 20 -w "%{http_code}" "$PAGES_URL/") || CODE=000
+            for i in 1 2 3 4; do
+              sleep 10
+              CODE=$(curl -s -o /tmp/pages-body.txt -m 25 -w "%{http_code}" "$PAGES_URL/") || CODE=000
               echo "Pages attempt $i: HTTP $CODE  ($PAGES_URL)"
               case "$CODE" in
-                200|301|302|401|403|404) echo "Pages 正常"; PAGES_FAIL=0; break ;;
-                000) PAGES_FAIL=1 ;;
-                *) PAGES_FAIL=1; echo "  响应片段: $(head -c 200 /tmp/pages-body.txt 2>/dev/null)" ;;
+                200|301|302|401|403|404) PAGES_OK=1; break ;;
               esac
             done
-            if [ "$PAGES_FAIL" = "1" ]; then
-              echo "::error::Pages 健康检查未通过"
-              exit 1
+            if [ "$PAGES_OK" = "1" ]; then
+              echo "Pages probe OK (HTTP $CODE)"
+            else
+              echo "::warning::Pages probe failed (last HTTP ${CODE:-none}); diagnostics below, deploy result unaffected"
+              echo "--- 响应片段 ---"
+              head -c 300 /tmp/pages-body.txt 2>/dev/null | tr -d '\r' || true
+              echo ""
+              echo "--- 响应头 ---"
+              curl -sI -m 25 "$PAGES_URL/" 2>&1 | head -15 || true
             fi
           fi
 
-          # 附加检查：workers.dev（Cron 依赖它）。失败只告警，不判死 ——
-          # workers.dev 在国内被墙、或 dashboard 关闭了该域名，都会导致探测失败，与部署无关。
+          # 附加检查：workers.dev（Cron 依赖它），失败同样只告警
           if [ -z "${WORKERS_SUBDOMAIN:-}" ]; then
             echo "::warning::WORKERS_SUBDOMAIN secret 未配置，跳过 workers.dev 检查"
           else
@@ -281,8 +286,8 @@ jobs:
             done
             case "$WCODE" in
               200|301|302|401|403|404) echo "Workers 正常" ;;
-              500) echo "::warning::$WURL 返回 500：通常是 KV 绑定缺失或 runtime 报错（Pages 入口不受影响）" ;;
-              *) echo "::warning::$WURL 不可达（HTTP $WCODE）：workers.dev 被墙 / 已关闭属正常现象；若依赖 Cron 请自查" ;;
+              500) echo "::warning::$WURL returns 500 - likely missing KV binding or runtime error (Pages entry unaffected)" ;;
+              *) echo "::warning::$WURL unreachable (HTTP $WCODE) - workers.dev blocked or disabled; check it yourself if you rely on Cron" ;;
             esac
           fi
 
