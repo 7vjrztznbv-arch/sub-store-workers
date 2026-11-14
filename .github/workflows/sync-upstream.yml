@@ -11,9 +11,9 @@ on:
         required: false
         default: 'false'
 
-concurrency:
-  group: sync-upstream
-  cancel-in-progress: false
+# 并发互斥已移除：原来 group: sync-upstream 里长期卡着一条 pending 的幽灵 run，
+# 会把新触发的运行静默吞掉（点了 Run workflow 却没生成 run 就是这个原因）。
+# 单日一跑的同步任务不需要互斥；万一两次重叠，标记推送那步自带 rebase 重试兜底。
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -230,12 +230,27 @@ jobs:
         if: steps.check.outputs.needed == 'true'
         working-directory: sub-store-workers
         run: |
+          set -eu
           echo "${{ steps.upstream.outputs.sha }}" > .upstream-sha
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .upstream-sha
-          git commit -m "chore: sync upstream to ${{ steps.upstream.outputs.version }} [skip ci]" || exit 0
-          git push
+          if git diff --cached --quiet; then
+            echo "标记未变化，无需提交"
+            exit 0
+          fi
+          git commit -m "chore: sync upstream to ${{ steps.upstream.outputs.version }} [skip ci]"
+          # 并发互斥去掉后，两次运行重叠时这里可能撞车：push 失败就 rebase 再来
+          for i in 1 2 3; do
+            if git push; then
+              echo "标记已推送"
+              exit 0
+            fi
+            echo "push 失败，第 $i 次重试（先 rebase 远端）"
+            git pull --rebase --autostash origin main || true
+          done
+          echo "::warning::标记推送三次均失败（检查 workflow 是否有 contents: write 权限），本次部署已完成，不影响站点"
+          exit 0
 
       - name: Health check
         if: steps.check.outputs.needed == 'true'
